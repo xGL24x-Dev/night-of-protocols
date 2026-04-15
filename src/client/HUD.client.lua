@@ -1,349 +1,463 @@
 -- ============================================
 -- HUD.client.lua
--- Script de CLIENTE — HUD completo
--- Incluye:
---   · Barra de vida + visor del personaje (abajo izquierda)
---   · Barra de menú con acciones (abajo centro)
+-- Barra de vida + comida + agua
+-- Contadores de botiquines y balas
+-- Abajo izquierda — estilo horror
 -- Ubicación: src/client/HUD.client.lua
 -- ============================================
 
-local Players          = game:GetService("Players")
-local TweenService     = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local RunService       = game:GetService("RunService")
+local Players           = game:GetService("Players")
+local TweenService      = game:GetService("TweenService")
+local UserInputService  = game:GetService("UserInputService")
+local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Debris            = game:GetService("Debris")
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local GameConfig = require(ReplicatedStorage.Shared.GameConfig)
 
--- Limpiar HUDs anteriores
-for _, name in ipairs({"HealthBarGui", "HUDGui"}) do
-	if playerGui:FindFirstChild(name) then
-		playerGui[name]:Destroy()
-	end
+if playerGui:FindFirstChild("HUDGui") then
+	playerGui.HUDGui:Destroy()
 end
 
 -- ════════════════════════════════════════════════
---  SCREEN GUI PRINCIPAL
+--  STATS DEL JUGADOR
+-- ════════════════════════════════════════════════
+local stats = {
+	hp      = 100,
+	hpMax   = 100,
+	food    = 100,
+	water   = 100,
+	medkits = 0,
+	ammo    = 0,
+}
+
+local FOOD_DRAIN_RATE  = 0.5
+local WATER_DRAIN_RATE = 0.8
+
+-- ════════════════════════════════════════════════
+--  SCREEN GUI
 -- ════════════════════════════════════════════════
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name           = "HUDGui"
 ScreenGui.ResetOnSpawn   = false
+ScreenGui.DisplayOrder   = 5
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent         = playerGui
 
 -- ════════════════════════════════════════════════
---  HELPER: crear Frame con esquinas redondeadas
+--  PANEL PRINCIPAL (abajo izquierda)
 -- ════════════════════════════════════════════════
-local function makeFrame(props)
-	local f = Instance.new("Frame")
-	f.Name             = props.name or "Frame"
-	f.Size             = props.size or UDim2.new(0,100,0,40)
-	f.Position         = props.pos  or UDim2.new(0,0,0,0)
-	f.AnchorPoint      = props.anchor or Vector2.new(0,0)
-	f.BackgroundColor3 = props.color or Color3.fromRGB(10,10,15)
-	f.BackgroundTransparency = props.alpha or 0.15
-	f.BorderSizePixel  = 0
-	f.Parent           = props.parent or ScreenGui
-	if props.radius then
-		local c = Instance.new("UICorner")
-		c.CornerRadius = UDim.new(0, props.radius)
-		c.Parent = f
+local Panel = Instance.new("Frame")
+Panel.Name             = "Panel"
+Panel.Size             = UDim2.new(0, 260, 0, 90)
+Panel.Position         = UDim2.new(0, 14, 1, -14)
+Panel.AnchorPoint      = Vector2.new(0, 1)
+Panel.BackgroundColor3 = Color3.fromRGB(5, 0, 0)
+Panel.BackgroundTransparency = 0.08
+Panel.BorderSizePixel  = 0
+Panel.Parent           = ScreenGui
+
+local PanelCorner = Instance.new("UICorner")
+PanelCorner.CornerRadius = UDim.new(0, 6)
+PanelCorner.Parent = Panel
+
+local PanelStroke = Instance.new("UIStroke")
+PanelStroke.Color       = Color3.fromRGB(160, 20, 20)
+PanelStroke.Thickness   = 1
+PanelStroke.Transparency = 0.5
+PanelStroke.Parent = Panel
+
+-- ── Fila superior: nombre + badge ────────────
+local TopRow = Instance.new("Frame")
+TopRow.Size             = UDim2.new(1, -16, 0, 20)
+TopRow.Position         = UDim2.new(0, 8, 0, 8)
+TopRow.BackgroundTransparency = 1
+TopRow.Parent           = Panel
+
+local NameLabel = Instance.new("TextLabel")
+NameLabel.Size             = UDim2.new(0.6, 0, 1, 0)
+NameLabel.BackgroundTransparency = 1
+NameLabel.Text             = player.DisplayName
+NameLabel.TextColor3       = Color3.fromRGB(220, 200, 200)
+NameLabel.Font             = Enum.Font.GothamBold
+NameLabel.TextSize         = 11
+NameLabel.TextXAlignment   = Enum.TextXAlignment.Left
+NameLabel.Parent           = TopRow
+
+local StatusBadge = Instance.new("TextLabel")
+StatusBadge.Name             = "StatusBadge"
+StatusBadge.Size             = UDim2.new(0, 60, 0, 16)
+StatusBadge.Position         = UDim2.new(1, -60, 0.5, 0)
+StatusBadge.AnchorPoint      = Vector2.new(0, 0.5)
+StatusBadge.BackgroundColor3 = Color3.fromRGB(30, 5, 5)
+StatusBadge.BackgroundTransparency = 0.3
+StatusBadge.BorderSizePixel  = 0
+StatusBadge.Text             = "ESTABLE"
+StatusBadge.TextColor3       = Color3.fromRGB(200, 60, 60)
+StatusBadge.Font             = Enum.Font.GothamBold
+StatusBadge.TextSize         = 8
+StatusBadge.TextXAlignment   = Enum.TextXAlignment.Center
+StatusBadge.Parent           = TopRow
+
+local BadgeCorner = Instance.new("UICorner")
+BadgeCorner.CornerRadius = UDim.new(0, 3)
+BadgeCorner.Parent = StatusBadge
+
+local BadgeStroke = Instance.new("UIStroke")
+BadgeStroke.Color       = Color3.fromRGB(160, 20, 20)
+BadgeStroke.Thickness   = 1
+BadgeStroke.Transparency = 0.4
+BadgeStroke.Parent = StatusBadge
+
+-- ════════════════════════════════════════════════
+--  FUNCIÓN: crear una barra de stat
+-- ════════════════════════════════════════════════
+local barFills = {}
+
+local function makeStatBar(name, iconText, iconColor, labelText, labelColor, yPos)
+	local row = Instance.new("Frame")
+	row.Name             = name .. "Row"
+	row.Size             = UDim2.new(1, -16, 0, 12)
+	row.Position         = UDim2.new(0, 8, 0, yPos)
+	row.BackgroundTransparency = 1
+	row.Parent           = Panel
+
+	local icon = Instance.new("TextLabel")
+	icon.Size             = UDim2.new(0, 12, 1, 0)
+	icon.BackgroundTransparency = 1
+	icon.Text             = iconText
+	icon.TextColor3       = iconColor
+	icon.Font             = Enum.Font.GothamBold
+	icon.TextSize         = 10
+	icon.TextXAlignment   = Enum.TextXAlignment.Center
+	icon.Parent           = row
+
+	local lbl = Instance.new("TextLabel")
+	lbl.Size             = UDim2.new(0, 34, 1, 0)
+	lbl.Position         = UDim2.new(0, 14, 0, 0)
+	lbl.BackgroundTransparency = 1
+	lbl.Text             = labelText
+	lbl.TextColor3       = labelColor
+	lbl.Font             = Enum.Font.GothamBold
+	lbl.TextSize         = 8
+	lbl.TextXAlignment   = Enum.TextXAlignment.Left
+	lbl.Parent           = row
+
+	local barBg = Instance.new("Frame")
+	barBg.Size             = UDim2.new(1, -76, 1, 0)
+	barBg.Position         = UDim2.new(0, 50, 0, 0)
+	barBg.BackgroundColor3 = Color3.fromRGB(25, 8, 8)
+	barBg.BackgroundTransparency = 0
+	barBg.BorderSizePixel  = 0
+	barBg.Parent           = row
+
+	local bgCorner = Instance.new("UICorner")
+	bgCorner.CornerRadius = UDim.new(0, 2)
+	bgCorner.Parent = barBg
+
+	local fill = Instance.new("Frame")
+	fill.Name             = name .. "Fill"
+	fill.Size             = UDim2.new(1, 0, 1, 0)
+	fill.BackgroundColor3 = Color3.fromRGB(140, 25, 25)
+	fill.BackgroundTransparency = 0
+	fill.BorderSizePixel  = 0
+	fill.Parent           = barBg
+
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(0, 2)
+	fillCorner.Parent = fill
+
+	local shine = Instance.new("Frame")
+	shine.Size             = UDim2.new(1, 0, 0.4, 0)
+	shine.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	shine.BackgroundTransparency = 0.88
+	shine.BorderSizePixel  = 0
+	shine.Parent           = fill
+	local sc = Instance.new("UICorner")
+	sc.CornerRadius = UDim.new(0, 2)
+	sc.Parent = shine
+
+	local num = Instance.new("TextLabel")
+	num.Name             = name .. "Num"
+	num.Size             = UDim2.new(0, 24, 1, 0)
+	num.Position         = UDim2.new(1, -24, 0, 0)
+	num.BackgroundTransparency = 1
+	num.Text             = "100"
+	num.TextColor3       = labelColor
+	num.Font             = Enum.Font.GothamBold
+	num.TextSize         = 8
+	num.TextXAlignment   = Enum.TextXAlignment.Right
+	num.Parent           = row
+
+	barFills[name] = fill
+	return fill, num
+end
+
+local hpFill,    hpNum    = makeStatBar("hp",    "♥", Color3.fromRGB(220,60,60),  "VIDA",   Color3.fromRGB(200,60,60),  32)
+local foodFill,  foodNum  = makeStatBar("food",  "◆", Color3.fromRGB(200,150,70), "COMIDA", Color3.fromRGB(190,140,60), 48)
+local waterFill, waterNum = makeStatBar("water", "▲", Color3.fromRGB(60,140,200), "AGUA",   Color3.fromRGB(60,130,190), 64)
+
+local function getBarColor(pct, barType)
+	if barType == "hp" then
+		if pct > 0.6 then return Color3.fromRGB(140,25,25)
+		elseif pct > 0.3 then return Color3.fromRGB(130,80,10)
+		else return Color3.fromRGB(110,110,10) end
+	elseif barType == "food" then
+		if pct > 0.5 then return Color3.fromRGB(120,80,15)
+		elseif pct > 0.25 then return Color3.fromRGB(100,60,10)
+		else return Color3.fromRGB(80,40,8) end
+	elseif barType == "water" then
+		if pct > 0.5 then return Color3.fromRGB(20,70,120)
+		elseif pct > 0.25 then return Color3.fromRGB(15,55,90)
+		else return Color3.fromRGB(10,35,65) end
 	end
-	if props.stroke then
-		local s = Instance.new("UIStroke")
-		s.Color        = props.stroke
-		s.Thickness    = props.strokeW or 1.5
-		s.Transparency = props.strokeA or 0.4
-		s.Parent = f
-	end
-	return f
-end
-
-local function makeLabel(props)
-	local l = Instance.new("TextLabel")
-	l.Name              = props.name or "Label"
-	l.Size              = props.size or UDim2.new(1,0,1,0)
-	l.Position          = props.pos  or UDim2.new(0,0,0,0)
-	l.AnchorPoint       = props.anchor or Vector2.new(0,0)
-	l.BackgroundTransparency = 1
-	l.Text              = props.text or ""
-	l.TextColor3        = props.color or Color3.fromRGB(220,220,220)
-	l.Font              = props.font  or Enum.Font.GothamBold
-	l.TextSize          = props.size2 or 13
-	l.TextXAlignment    = props.alignX or Enum.TextXAlignment.Left
-	l.TextYAlignment    = props.alignY or Enum.TextYAlignment.Center
-	l.Parent            = props.parent or ScreenGui
-	return l
 end
 
 -- ════════════════════════════════════════════════
---  SECCIÓN 1: BARRA DE VIDA + PERSONAJE (abajo izquierda)
+--  PANEL DE RECURSOS
 -- ════════════════════════════════════════════════
-local HpContainer = makeFrame({
-	name   = "HpContainer",
-	size   = UDim2.new(0, 290, 0, 84),
-	pos    = UDim2.new(0, 16, 1, -16),
-	anchor = Vector2.new(0, 1),
-	color  = Color3.fromRGB(8, 8, 12),
-	alpha  = 0.15,
-	radius = 12,
-	stroke = Color3.fromRGB(180, 30, 30),
-	strokeW = 1.5,
-	strokeA = 0.4,
-	parent = ScreenGui,
-})
+local ResPanel = Instance.new("Frame")
+ResPanel.Name             = "Resources"
+ResPanel.Size             = UDim2.new(0, 260, 0, 36)
+ResPanel.Position         = UDim2.new(0, 14, 1, -110)
+ResPanel.AnchorPoint      = Vector2.new(0, 1)
+ResPanel.BackgroundTransparency = 1
+ResPanel.Parent           = ScreenGui
 
--- ── Viewport del personaje ────────────────────
-local Viewport = Instance.new("ViewportFrame")
-Viewport.Name                   = "CharViewport"
-Viewport.Size                   = UDim2.new(0, 68, 0, 68)
-Viewport.Position               = UDim2.new(0, 8, 0.5, 0)
-Viewport.AnchorPoint            = Vector2.new(0, 0.5)
-Viewport.BackgroundColor3       = Color3.fromRGB(15, 15, 22)
-Viewport.BackgroundTransparency = 0.3
-Viewport.BorderSizePixel        = 0
-Viewport.Parent                 = HpContainer
+local ResLayout = Instance.new("UIListLayout")
+ResLayout.FillDirection       = Enum.FillDirection.Horizontal
+ResLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+ResLayout.VerticalAlignment   = Enum.VerticalAlignment.Center
+ResLayout.Padding             = UDim.new(0, 6)
+ResLayout.Parent              = ResPanel
 
-local vc = Instance.new("UICorner")
-vc.CornerRadius = UDim.new(0, 8)
-vc.Parent = Viewport
+local function makeResBox(name, iconText, iconColor, labelText, strokeColor)
+	local box = Instance.new("Frame")
+	box.Name             = name .. "Box"
+	box.Size             = UDim2.new(0, 125, 1, 0)
+	box.BackgroundColor3 = Color3.fromRGB(5, 0, 0)
+	box.BackgroundTransparency = 0.08
+	box.BorderSizePixel  = 0
+	box.Parent           = ResPanel
 
-local vs = Instance.new("UIStroke")
-vs.Color = Color3.fromRGB(200, 40, 40)
-vs.Thickness = 1
-vs.Transparency = 0.5
-vs.Parent = Viewport
+	local bc = Instance.new("UICorner")
+	bc.CornerRadius = UDim.new(0, 6)
+	bc.Parent = box
 
-local ViewportCam = Instance.new("Camera")
-ViewportCam.Parent = Viewport
-Viewport.CurrentCamera = ViewportCam
+	local bs = Instance.new("UIStroke")
+	bs.Color = strokeColor
+	bs.Thickness = 1
+	bs.Transparency = 0.5
+	bs.Parent = box
 
--- ── Panel derecho (nombre + barra) ───────────
-local RightPanel = Instance.new("Frame")
-RightPanel.Size             = UDim2.new(1, -90, 1, 0)
-RightPanel.Position         = UDim2.new(0, 84, 0, 0)
-RightPanel.BackgroundTransparency = 1
-RightPanel.BorderSizePixel  = 0
-RightPanel.Parent           = HpContainer
+	local icon = Instance.new("TextLabel")
+	icon.Size             = UDim2.new(0, 28, 1, 0)
+	icon.Position         = UDim2.new(0, 6, 0, 0)
+	icon.BackgroundTransparency = 1
+	icon.Text             = iconText
+	icon.TextColor3       = iconColor
+	icon.Font             = Enum.Font.GothamBold
+	icon.TextSize         = 16
+	icon.TextXAlignment   = Enum.TextXAlignment.Center
+	icon.Parent           = box
 
--- Nombre del jugador
-local NameLabel = makeLabel({
-	name   = "PlayerName",
-	size   = UDim2.new(1, -8, 0, 20),
-	pos    = UDim2.new(0, 4, 0, 10),
-	text   = player.DisplayName,
-	color  = Color3.fromRGB(230, 230, 230),
-	font   = Enum.Font.GothamBold,
-	size2  = 13,
-	parent = RightPanel,
-})
+	local lbl = Instance.new("TextLabel")
+	lbl.Size             = UDim2.new(0, 44, 0.5, 0)
+	lbl.Position         = UDim2.new(0, 34, 0, 2)
+	lbl.BackgroundTransparency = 1
+	lbl.Text             = labelText
+	lbl.TextColor3       = Color3.fromRGB(130, 110, 110)
+	lbl.Font             = Enum.Font.Gotham
+	lbl.TextSize         = 7
+	lbl.TextXAlignment   = Enum.TextXAlignment.Left
+	lbl.Parent           = box
 
--- Fondo de la barra
-local BarBg = makeFrame({
-	name   = "BarBg",
-	size   = UDim2.new(1, -8, 0, 14),
-	pos    = UDim2.new(0, 4, 0, 36),
-	color  = Color3.fromRGB(30, 10, 10),
-	alpha  = 0,
-	radius = 7,
-	parent = RightPanel,
-})
+	local count = Instance.new("TextLabel")
+	count.Name           = name .. "Count"
+	count.Size           = UDim2.new(0, 44, 0.5, 0)
+	count.Position       = UDim2.new(0, 34, 0.5, 0)
+	count.BackgroundTransparency = 1
+	count.Text           = "0"
+	count.TextColor3     = iconColor
+	count.Font           = Enum.Font.GothamBold
+	count.TextSize       = 13
+	count.TextXAlignment = Enum.TextXAlignment.Left
+	count.Parent         = box
 
--- Relleno de la barra
-local BarFill = makeFrame({
-	name   = "BarFill",
-	size   = UDim2.new(1, 0, 1, 0),
-	color  = Color3.fromRGB(220, 40, 40),
-	alpha  = 0,
-	radius = 7,
-	parent = BarBg,
-})
-
--- Brillo superior
-local BarShine = Instance.new("Frame")
-BarShine.Size             = UDim2.new(1,0,0.45,0)
-BarShine.BackgroundColor3 = Color3.fromRGB(255,255,255)
-BarShine.BackgroundTransparency = 0.82
-BarShine.BorderSizePixel  = 0
-BarShine.Parent = BarFill
-local bsc = Instance.new("UICorner")
-bsc.CornerRadius = UDim.new(0,7)
-bsc.Parent = BarShine
-
--- Texto HP
-local HpText = makeLabel({
-	name   = "HpText",
-	size   = UDim2.new(1, -8, 0, 14),
-	pos    = UDim2.new(0, 4, 0, 56),
-	text   = "100 / 100",
-	color  = Color3.fromRGB(170, 170, 170),
-	font   = Enum.Font.Gotham,
-	size2  = 11,
-	parent = RightPanel,
-})
-
-local HeartIcon = makeLabel({
-	name   = "Heart",
-	size   = UDim2.new(0, 14, 0, 14),
-	pos    = UDim2.new(1, -18, 0, 56),
-	anchor = Vector2.new(0,0),
-	text   = "♥",
-	color  = Color3.fromRGB(220, 40, 40),
-	font   = Enum.Font.GothamBold,
-	size2  = 13,
-	parent = RightPanel,
-})
-
--- Borde pulsante de la barra (referencia al UIStroke del contenedor)
-local HpStroke = HpContainer:FindFirstChildOfClass("UIStroke")
-
--- Barra de menú eliminada — reemplazada por KeyGuide (I)
-
--- ════════════════════════════════════════════════
---  SISTEMA DE LINTERNA
--- ════════════════════════════════════════════════
-
--- La linterna es un SpotLight que se crea en la cabeza
--- del personaje. Se activa/desactiva con F.
-local flashlight     = nil   -- referencia al SpotLight activo
-local flashlightOn   = false
-
-local function createFlashlight(character)
-	-- Buscar o crear la parte donde va la linterna (cabeza)
-	local head = character:WaitForChild("Head")
-
-	-- Eliminar linterna anterior si existe
-	local old = head:FindFirstChild("Flashlight")
-	if old then old:Destroy() end
-
-	-- Crear el SpotLight
-	local spot = Instance.new("SpotLight")
-	spot.Name        = "Flashlight"
-	spot.Brightness  = 5          -- intensidad
-	spot.Range       = 60         -- alcance en studs
-	spot.Angle       = 45         -- ángulo del cono de luz
-	spot.Color       = Color3.fromRGB(255, 245, 220)  -- blanco cálido
-	spot.Face        = Enum.NormalId.Front
-	spot.Shadows     = true
-	spot.Enabled     = false      -- empieza apagada
-	spot.Parent      = head
-
-	flashlight = spot
+	return count, bs
 end
 
-local function toggleFlashlight()
-	if not flashlight then return end
-	flashlightOn = not flashlightOn
-	flashlight.Enabled = flashlightOn
+local medCount,  medStroke  = makeResBox("med",  "+", Color3.fromRGB(220,70,70),   "BOTIQUIN", Color3.fromRGB(180,40,40))
+local ammoCount, ammoStroke = makeResBox("ammo", "•", Color3.fromRGB(220,200,100), "BALAS",    Color3.fromRGB(160,140,80))
 
-	-- Animación suave de brillo al encender/apagar
-	if flashlightOn then
-		flashlight.Brightness = 0
-		-- Subir brillo gradualmente
-		local t = 0
-		local connection
-		connection = game:GetService("RunService").Heartbeat:Connect(function(dt)
-			t = t + dt * 4   -- velocidad de fade-in
-			flashlight.Brightness = math.min(t * 5, 5)
-			if t >= 1 then connection:Disconnect() end
-		end)
+-- ════════════════════════════════════════════════
+--  ACTUALIZAR UI
+-- ════════════════════════════════════════════════
+local function updateHUD()
+	local hpPct    = math.clamp(stats.hp    / stats.hpMax, 0, 1)
+	local foodPct  = math.clamp(stats.food  / 100,         0, 1)
+	local waterPct = math.clamp(stats.water / 100,         0, 1)
+
+	TweenService:Create(hpFill,    TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ Size = UDim2.new(hpPct,    0, 1, 0), BackgroundColor3 = getBarColor(hpPct,    "hp")    }):Play()
+	TweenService:Create(foodFill,  TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ Size = UDim2.new(foodPct,  0, 1, 0), BackgroundColor3 = getBarColor(foodPct,  "food")  }):Play()
+	TweenService:Create(waterFill, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ Size = UDim2.new(waterPct, 0, 1, 0), BackgroundColor3 = getBarColor(waterPct, "water") }):Play()
+
+	hpNum.Text    = math.floor(stats.hp)
+	foodNum.Text  = math.floor(stats.food)
+	waterNum.Text = math.floor(stats.water)
+
+	medCount.Text  = tostring(stats.medkits)
+	ammoCount.Text = tostring(stats.ammo)
+
+	medStroke.Color        = stats.medkits == 0 and Color3.fromRGB(220,60,60)  or Color3.fromRGB(180,40,40)
+	medStroke.Transparency = stats.medkits == 0 and 0.1 or 0.5
+	ammoStroke.Color        = stats.ammo == 0 and Color3.fromRGB(220,180,40)   or Color3.fromRGB(160,140,80)
+	ammoStroke.Transparency = stats.ammo == 0 and 0.1 or 0.5
+
+	local minStat = math.min(hpPct, foodPct, waterPct)
+	if minStat > 0.6 then
+		StatusBadge.Text       = "ESTABLE"
+		StatusBadge.TextColor3 = Color3.fromRGB(200,60,60)
+		BadgeStroke.Color      = Color3.fromRGB(160,20,20)
+		PanelStroke.Color      = Color3.fromRGB(160,20,20)
+	elseif minStat > 0.3 then
+		StatusBadge.Text       = "PELIGRO"
+		StatusBadge.TextColor3 = Color3.fromRGB(220,160,40)
+		BadgeStroke.Color      = Color3.fromRGB(180,120,0)
+		PanelStroke.Color      = Color3.fromRGB(180,120,0)
 	else
-		-- Bajar brillo gradualmente
-		local t = 1
-		local connection
-		connection = game:GetService("RunService").Heartbeat:Connect(function(dt)
-			t = t - dt * 4
-			flashlight.Brightness = math.max(t * 5, 0)
-			if t <= 0 then connection:Disconnect() end
-		end)
+		StatusBadge.Text       = "CRITICO"
+		StatusBadge.TextColor3 = Color3.fromRGB(220,220,40)
+		BadgeStroke.Color      = Color3.fromRGB(200,200,0)
+		PanelStroke.Color      = Color3.fromRGB(200,200,0)
 	end
 end
 
--- ── Solo tecla F para la linterna ────────────
-UserInputService.InputBegan:Connect(function(input, gp)
-	if gp then return end
-	if input.KeyCode == Enum.KeyCode.F then
-		toggleFlashlight()
+-- ════════════════════════════════════════════════
+--  DRENADO DE COMIDA Y AGUA
+-- ════════════════════════════════════════════════
+local drainTimer = 0
+
+RunService.Heartbeat:Connect(function(dt)
+	drainTimer = drainTimer + dt
+	if drainTimer >= 1 then
+		drainTimer = 0
+		stats.food  = math.max(0, stats.food  - FOOD_DRAIN_RATE  / 60)
+		stats.water = math.max(0, stats.water - WATER_DRAIN_RATE / 60)
+
+		if stats.food <= 0 or stats.water <= 0 then
+			local character = player.Character
+			if character then
+				local humanoid = character:FindFirstChildOfClass("Humanoid")
+				if humanoid and humanoid.Health > 0 then
+					humanoid.Health = math.max(0, humanoid.Health - 0.5)
+				end
+			end
+		end
+		updateHUD()
 	end
 end)
 
 -- ════════════════════════════════════════════════
---  LÓGICA DE SALUD
+--  EVENTOS DEL SERVIDOR
 -- ════════════════════════════════════════════════
-local function getBarColor(pct)
-	if pct > 0.6 then
-		return Color3.fromRGB(220, 40, 40)
-	elseif pct > 0.3 then
-		return Color3.fromRGB(220, 140, 20)
-	else
-		return Color3.fromRGB(220, 220, 20)
-	end
+local remotes   = ReplicatedStorage:WaitForChild("Remotes")
+local onDamaged = remotes:WaitForChild("PlayerDamaged")
+
+onDamaged.OnClientEvent:Connect(function(currentHp, maxHp)
+	stats.hp    = currentHp
+	stats.hpMax = maxHp
+	updateHUD()
+
+	-- Flash rojo pantalla completa (una sola vez, desaparece solo)
+	local flash = Instance.new("Frame")
+	flash.Size             = UDim2.new(1, 0, 1, 0)
+	flash.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+	flash.BackgroundTransparency = 0.5
+	flash.BorderSizePixel  = 0
+	flash.ZIndex           = 99
+	flash.Parent           = ScreenGui
+	TweenService:Create(flash,
+		TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ BackgroundTransparency = 1 }):Play()
+	Debris:AddItem(flash, 0.5)
+
+	-- Sonido de golpe
+	local sound = Instance.new("Sound")
+	sound.SoundId = "rbxassetid://9120386446"
+	sound.Volume  = 0.8
+	sound.Parent  = playerGui
+	sound:Play()
+	Debris:AddItem(sound, 2)
+end)
+
+-- ════════════════════════════════════════════════
+--  FUNCIONES PÚBLICAS
+-- ════════════════════════════════════════════════
+local function addMedkit(amount)
+	stats.medkits = stats.medkits + (amount or 1)
+	updateHUD()
 end
 
-local function updateHp(current, max)
-	local pct = math.clamp(current / max, 0, 1)
-
-	TweenService:Create(BarFill, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{ Size = UDim2.new(pct, 0, 1, 0) }):Play()
-
-	TweenService:Create(BarFill, TweenInfo.new(0.3),
-		{ BackgroundColor3 = getBarColor(pct) }):Play()
-
-	HpText.Text = math.floor(current) .. " / " .. max
-
-	if pct <= 0.3 and HpStroke then
-		TweenService:Create(HpStroke, TweenInfo.new(0.4, Enum.EasingStyle.Sine,
-			Enum.EasingDirection.InOut, -1, true),
-			{ Transparency = 0.0 }):Play()
-	elseif HpStroke then
-		HpStroke.Transparency = 0.4
-	end
+local function addAmmo(amount)
+	stats.ammo = stats.ammo + (amount or 10)
+	updateHUD()
 end
 
--- ── Viewport: clonar personaje ────────────────
-local function setupViewport(character)
-	for _, c in ipairs(Viewport:GetChildren()) do
-		if c:IsA("Model") then c:Destroy() end
-	end
-	local clone = character:Clone()
-	clone.Parent = Viewport
-	for _, s in ipairs(clone:GetDescendants()) do
-		if s:IsA("Script") or s:IsA("LocalScript") then s.Enabled = false end
-	end
-	local head = clone:FindFirstChild("Head")
-	if head then
-		ViewportCam.CFrame = CFrame.new(
-			head.Position + Vector3.new(0, 0.5, 3.8),
-			head.Position + Vector3.new(0, 0.2, 0)
-		)
-	end
+local function useMedkit()
+	if stats.medkits <= 0 then return end
+	local character = player.Character
+	if not character then return end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	stats.medkits = stats.medkits - 1
+	humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + 50)
+	stats.hp    = humanoid.Health
+	stats.food  = math.min(100, stats.food  + 10)
+	stats.water = math.min(100, stats.water + 5)
+	updateHUD()
+	print("[CLIENT] Botiquín usado. Quedan:", stats.medkits)
 end
+
+-- Tecla H → usar botiquín
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.H then
+		useMedkit()
+	end
+end)
 
 -- ── Conectar al personaje ─────────────────────
 local function onCharacter(character)
 	local humanoid = character:WaitForChild("Humanoid")
-	local maxHp    = GameConfig.PLAYER_HEALTH
-
-	task.wait(0.5)
-	setupViewport(character)
-	createFlashlight(character)   -- ← crear linterna en el nuevo personaje
-
-	-- Si la linterna estaba encendida antes del respawn, reencenderla
-	if flashlightOn then
-		flashlightOn = false       -- resetear estado para que toggleFlashlight funcione
-		toggleFlashlight()
-	end
-
+	stats.hp    = humanoid.Health
+	stats.hpMax = humanoid.MaxHealth
 	humanoid.HealthChanged:Connect(function(hp)
-		updateHp(hp, maxHp)
+		stats.hp = hp
+		updateHUD()
 	end)
-
-	updateHp(humanoid.Health, maxHp)
+	updateHUD()
 end
 
 player.CharacterAdded:Connect(onCharacter)
 if player.Character then onCharacter(player.Character) end
 
-print("[CLIENT] HUD completo cargado.")
+-- Exponer para otros scripts
+local addMedkitEvent = Instance.new("BindableEvent")
+addMedkitEvent.Name   = "AddMedkit"
+addMedkitEvent.Parent = ReplicatedStorage
+addMedkitEvent.Event:Connect(function(amt) addMedkit(amt) end)
+
+local addAmmoEvent = Instance.new("BindableEvent")
+addAmmoEvent.Name   = "AddAmmo"
+addAmmoEvent.Parent = ReplicatedStorage
+addAmmoEvent.Event:Connect(function(amt) addAmmo(amt) end)
+
+updateHUD()
+print("[CLIENT] HUD cargado — H para usar botiquín.")

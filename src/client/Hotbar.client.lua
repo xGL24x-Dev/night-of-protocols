@@ -49,6 +49,7 @@ local BACKPACK_UPGRADES = {
 -- Definición de todos los items
 local ITEM_DATA = {
 	Backpack   = { icon="🎒", name="Mochila",          color=Color3.fromRGB(80,  140, 255), isBackpack=true  },
+	Pistol     = { icon="🔫", name="Pistola básica",   color=Color3.fromRGB(190, 190, 210)                  },
 	Flashlight = { icon="🔦", name="Linterna",          color=Color3.fromRGB(255, 210, 80)                   },
 	Battery    = { icon="🔋", name="Batería",            color=Color3.fromRGB(80,  200, 80)                   },
 	Key        = { icon="🔑", name="Llave",              color=Color3.fromRGB(255, 200, 40)                   },
@@ -66,6 +67,7 @@ local ITEM_DATA = {
 local remotes        = ReplicatedStorage:WaitForChild("Remotes")
 local pickupItem     = remotes:WaitForChild("PickupItem")
 local onItemPickedUp = remotes:WaitForChild("ItemPickedUp")
+local requestShoot   = remotes:WaitForChild("RequestShoot")
 
 -- ════════════════════════════════════════════════
 --  SCREEN GUI
@@ -576,6 +578,20 @@ local slotKeys = {
 
 UserInputService.InputBegan:Connect(function(input, gp)
 	if gp then return end
+
+	-- Click izquierdo → disparar si tienes pistola en el slot seleccionado
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		local selectedItem = hotbarItems[selectedSlot]
+		if selectedItem and selectedItem.itemType == "Pistol" then
+			local camera = workspace.CurrentCamera
+			if camera then
+				local origin = camera.CFrame.Position
+				local direction = camera.CFrame.LookVector
+				requestShoot:FireServer(origin, direction)
+			end
+		end
+		return
+	end
 
 	-- Seleccionar slot con teclas 1–6
 	local slot = slotKeys[input.KeyCode]
