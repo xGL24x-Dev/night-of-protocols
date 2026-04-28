@@ -32,7 +32,7 @@ local Config = {
 	TRAP_COOLDOWN      = 1.5,   -- segundos entre golpes del mismo objeto
 	REVIVE_TIME        = 5,     -- segundos para revivir a un compañero
 	REVIVE_RANGE       = 8,     -- studs máximos para poder revivir
-	DOWNED_TIME        = 30,    -- segundos antes de morir si nadie revive
+	DOWNED_TIME        = 120,   -- segundos antes de morir si nadie revive (2 minutos)
 }
 
 -- ════════════════════════════════════════════════
@@ -73,7 +73,7 @@ local function applyDamage(player, amount, source)
 	if not humanoid or humanoid.Health <= 0 then return end
 	if downedPlayers[player.UserId] then return end
 
-	local newHealth = math.max(0, humanoid.Health - amount)
+	local newHealth = math.max(1, humanoid.Health - amount)  -- mínimo 1 para no matar directo
 	humanoid.Health = newHealth
 
 	onPlayerDamaged:FireClient(player, newHealth, humanoid.MaxHealth)
@@ -81,8 +81,11 @@ local function applyDamage(player, amount, source)
 	print(string.format("[SERVER] %s recibió %d de daño por %s. Salud: %.0f/%.0f",
 		player.Name, amount, source, newHealth, humanoid.MaxHealth))
 
-	if newHealth <= 0 then
-		onPlayerDied:FireClient(player)
+	-- Si la vida llega al mínimo → tumbar en vez de matar
+	if humanoid.Health <= 1 and not downedPlayers[player.UserId] then
+		task.spawn(function()
+			downPlayer(player)
+		end)
 	end
 end
 
@@ -96,10 +99,7 @@ local function downPlayer(player)
 	if not humanoid then return end
 	if downedPlayers[player.UserId] then return end
 
-	humanoid.Health    = 1
-	humanoid.WalkSpeed = 0
-	humanoid.JumpPower = 0
-
+	-- Marcar tumbado PRIMERO
 	downedPlayers[player.UserId] = {
 		player     = player,
 		character  = character,
@@ -107,23 +107,54 @@ local function downPlayer(player)
 		isReviving = false,
 	}
 
-	onPlayerDowned:FireAllClients(player, Config.DOWNED_TIME)
-	print("[SERVER]", player.Name, "está tumbado —", Config.DOWNED_TIME, "segundos para morir")
+	-- Fijar vida en 2 para evitar muerte automática
+	humanoid.Health    = 2
+	humanoid.WalkSpeed = 0
+	humanoid.JumpPower = 0
+	humanoid.BreakJointsOnDeath = false  -- evita que Roblox destruya el personaje
 
+	-- Flag para que otros scripts sepan que está tumbado
+	local flag = character:FindFirstChild("IsDowned") or Instance.new("BoolValue")
+	flag.Name   = "IsDowned"
+	flag.Value  = true
+	flag.Parent = character
+
+	onPlayerDowned:FireAllClients(player, Config.DOWNED_TIME)
+	print("[SERVER]", player.Name, "tumbado —", Config.DOWNED_TIME, "s")
+
+	local userId = player.UserId
 	task.spawn(function()
-		while downedPlayers[player.UserId] do
+		while downedPlayers[userId] do
 			task.wait(1)
-			local data = downedPlayers[player.UserId]
+			local data = downedPlayers[userId]
 			if not data then break end
+
+			-- Mantener vida en 2 cada segundo para que no muera solo
+			local ch = player.Character
+			if ch then
+				local hum = ch:FindFirstChildOfClass("Humanoid")
+				if hum and hum.Health > 0 then
+					hum.Health = 2
+				end
+			end
 
 			data.timeLeft = data.timeLeft - 1
 			onPlayerDowned:FireAllClients(player, data.timeLeft)
 
 			if data.timeLeft <= 0 then
-				downedPlayers[player.UserId] = nil
-				if humanoid then humanoid.Health = 0 end
+				downedPlayers[userId] = nil
+				local ch2 = player.Character
+				if ch2 then
+					local f = ch2:FindFirstChild("IsDowned")
+					if f then f:Destroy() end
+					local hum = ch2:FindFirstChildOfClass("Humanoid")
+					if hum then
+						hum.BreakJointsOnDeath = true  -- restaurar para que respawnee
+						hum.Health = 0
+					end
+				end
 				onPlayerDied:FireClient(player)
-				print("[SERVER]", player.Name, "murió — nadie lo revivió")
+				print("[SERVER]", player.Name, "murió — tiempo agotado")
 				break
 			end
 		end
@@ -160,7 +191,6 @@ local function startRevive(reviverPlayer, downedPlayer)
 		onReviveProgress:FireClient(reviverPlayer, downedPlayer, progress)
 		onReviveProgress:FireClient(downedPlayer, downedPlayer, progress)
 
-		-- Cancelar si se alejó
 		local revChar  = reviverPlayer.Character
 		local downChar = downedPlayer.Character
 		if not revChar or not downChar then
@@ -174,24 +204,37 @@ local function startRevive(reviverPlayer, downedPlayer)
 			stopRevive(reviverPlayer)
 			if data then data.isReviving = false end
 			onReviveProgress:FireClient(reviverPlayer, downedPlayer, -1)
-			print("[SERVER] Revive cancelado — demasiado lejos")
 			return
 		end
 
 		if progress >= 1 then
-			-- Revivido exitosamente
 			stopRevive(reviverPlayer)
+
+			-- Limpiar estado tumbado
 			downedPlayers[downedPlayer.UserId] = nil
 
 			local humanoid = downChar:FindFirstChildOfClass("Humanoid")
 			if humanoid then
-				humanoid.Health    = humanoid.MaxHealth * 0.3
+				-- 1. Quitar flag IsDowned
+				local flag = downChar:FindFirstChild("IsDowned")
+				if flag then flag:Destroy() end
+
+				-- 2. Restaurar movimiento y muerte normal
 				humanoid.WalkSpeed = 16
 				humanoid.JumpPower = 50
+				humanoid.AutoRotate = true
+				humanoid.BreakJointsOnDeath = true  -- restaurar comportamiento normal
+
+				-- 3. Subir vida a 15% con pequeño delay
+				task.wait(0.1)
+				humanoid.Health = math.max(humanoid.MaxHealth * 0.15, 15)
+
+				-- 4. Notificar al cliente
+				onPlayerDamaged:FireClient(downedPlayer, humanoid.Health, humanoid.MaxHealth)
 			end
 
 			onPlayerRevived:FireAllClients(downedPlayer, reviverPlayer)
-			print("[SERVER]", reviverPlayer.Name, "revivió a", downedPlayer.Name, "con 30% de vida")
+			print("[SERVER]", reviverPlayer.Name, "revivió a", downedPlayer.Name, "— 15% HP")
 		end
 	end)
 end
@@ -279,9 +322,33 @@ local function setupFallDamage(player)
 			lastVelocityY = velY
 		end)
 
+		-- Interceptar cualquier muerte para convertirla en estado tumbado
+		humanoid.HealthChanged:Connect(function(hp)
+			if hp <= 0 and not downedPlayers[player.UserId] then
+				-- Evitar que Roblox mate al jugador inmediatamente
+				task.spawn(function()
+					humanoid.Health = 2
+					downPlayer(player)
+				end)
+			elseif hp <= 0 and downedPlayers[player.UserId] then
+				-- Ya está tumbado — mantener vivo para que no respawnee
+				humanoid.Health = 2
+			end
+		end)
+
+		-- Evitar respawn automático mientras está tumbado
 		humanoid.Died:Connect(function()
 			conn:Disconnect()
-			downedPlayers[player.UserId] = nil
+			if downedPlayers[player.UserId] then
+				-- Está tumbado — restaurar vida para cancelar el respawn
+				task.spawn(function()
+					task.wait(0.05)
+					if player.Character and downedPlayers[player.UserId] then
+						local hum = player.Character:FindFirstChildOfClass("Humanoid")
+						if hum then hum.Health = 2 end
+					end
+				end)
+			end
 		end)
 	end)
 end
@@ -334,13 +401,47 @@ workspace.DescendantAdded:Connect(function(obj)
 end)
 
 -- ════════════════════════════════════════════════
+--  DESACTIVAR REGENERACIÓN AUTOMÁTICA DE ROBLOX
+-- ════════════════════════════════════════════════
+local function disableAutoRegen(player)
+	player.CharacterAdded:Connect(function(character)
+		-- Limpiar estado tumbado silenciosamente (sin disparar evento de revivir)
+		downedPlayers[player.UserId] = nil
+		stopRevive(player)
+
+		-- Eliminar el script "Health" que Roblox agrega por defecto
+		local healthScript = character:WaitForChild("Health", 5)
+		if healthScript then healthScript:Destroy() end
+
+		local humanoid = character:WaitForChild("Humanoid")
+
+		-- Ocultar barra nativa
+		humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+
+		-- Esperar a que Roblox termine de cargar y forzar 100%
+		task.wait(0.15)
+		humanoid.Health = humanoid.MaxHealth
+
+		-- Avisar al cliente que tiene 100% (sin usar evento de revivir)
+		onPlayerDamaged:FireClient(player, humanoid.MaxHealth, humanoid.MaxHealth)
+
+		-- Limpiar outlines de este jugador en todos los clientes
+		onPlayerRevived:FireAllClients(player, nil)
+
+		print("[SERVER]", player.Name, "spawneó —", humanoid.Health, "HP")
+	end)
+end
+
+-- ════════════════════════════════════════════════
 --  INICIALIZAR
 -- ════════════════════════════════════════════════
 Players.PlayerAdded:Connect(function(player)
+	disableAutoRegen(player)
 	setupFallDamage(player)
 end)
 
 for _, player in ipairs(Players:GetPlayers()) do
+	disableAutoRegen(player)
 	setupFallDamage(player)
 end
 
@@ -348,6 +449,16 @@ Players.PlayerRemoving:Connect(function(player)
 	downedPlayers[player.UserId] = nil
 	stopRevive(player)
 end)
+
+-- Escuchar petición de tumbado desde MeleeSystem
+local requestDown = ReplicatedStorage:WaitForChild("RequestDown", 10)
+if requestDown then
+	requestDown.Event:Connect(function(targetPlayer)
+		if not downedPlayers[targetPlayer.UserId] then
+			downPlayer(targetPlayer)
+		end
+	end)
+end
 
 task.wait(2)
 scanForTraps(workspace)

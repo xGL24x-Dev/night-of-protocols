@@ -278,6 +278,23 @@ RunService.Heartbeat:Connect(function()
 		end
 	end
 
+	-- Si se alejó mientras revivía → cancelar y ocultar barra
+	if isReviving and nearbyDowned then
+		local downChar = nearbyDowned.Character
+		if downChar then
+			local downRoot = downChar:FindFirstChild("HumanoidRootPart")
+			if downRoot then
+				local dist = (rootPart.Position - downRoot.Position).Magnitude
+				if dist > REVIVE_RANGE then
+					isReviving = false
+					cancelRevive:FireServer()
+					RevivePanel.Visible = false
+					ReviveFill.Size     = UDim2.new(0, 0, 1, 0)
+				end
+			end
+		end
+	end
+
 	-- Actualizar prompt flotante
 	if closest ~= nearbyDowned then
 		nearbyDowned = closest
@@ -294,6 +311,7 @@ RunService.Heartbeat:Connect(function()
 				isReviving = false
 				cancelRevive:FireServer()
 				RevivePanel.Visible = false
+				ReviveFill.Size     = UDim2.new(0, 0, 1, 0)
 			end
 		end
 	end
@@ -326,30 +344,126 @@ UserInputService.InputEnded:Connect(function(input, gp)
 end)
 
 -- ════════════════════════════════════════════════
+--  TIMERS INDEPENDIENTES POR JUGADOR TUMBADO
+-- ════════════════════════════════════════════════
+local downedTimers = {}  -- { [userId] = BillboardGui }
+
+local function createDownedTimer(downedPlayer, timeLeft)
+	if downedPlayer == player then return end  -- el propio jugador usa el DownedPanel
+	local character = downedPlayer.Character
+	if not character then return end
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then return end
+
+	-- Quitar timer anterior si existe
+	if downedTimers[downedPlayer.UserId] then
+		downedTimers[downedPlayer.UserId]:Destroy()
+	end
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name        = "DownedTimer_" .. downedPlayer.UserId
+	billboard.Size        = UDim2.new(0, 140, 0, 50)
+	billboard.StudsOffset = Vector3.new(0, 5, 0)
+	billboard.AlwaysOnTop = true
+	billboard.Adornee     = rootPart
+	billboard.Parent      = workspace
+
+	local bg = Instance.new("Frame", billboard)
+	bg.Size             = UDim2.new(1, 0, 1, 0)
+	bg.BackgroundColor3 = Color3.fromRGB(5, 0, 0)
+	bg.BackgroundTransparency = 0.1
+	bg.BorderSizePixel  = 0
+	Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 6)
+	local st = Instance.new("UIStroke", bg)
+	st.Color = Color3.fromRGB(200,20,20); st.Thickness = 1.5
+
+	local nameLbl = Instance.new("TextLabel", bg)
+	nameLbl.Size             = UDim2.new(1, -8, 0, 18)
+	nameLbl.Position         = UDim2.new(0, 4, 0, 3)
+	nameLbl.BackgroundTransparency = 1
+	nameLbl.Text             = downedPlayer.DisplayName
+	nameLbl.TextColor3       = Color3.fromRGB(220, 180, 180)
+	nameLbl.Font             = Enum.Font.GothamBold
+	nameLbl.TextSize         = 11
+	nameLbl.TextXAlignment   = Enum.TextXAlignment.Center
+
+	local timerLbl = Instance.new("TextLabel", bg)
+	timerLbl.Name            = "Time"
+	timerLbl.Size            = UDim2.new(1, -8, 0, 22)
+	timerLbl.Position        = UDim2.new(0, 4, 0, 22)
+	timerLbl.BackgroundTransparency = 1
+	timerLbl.Text            = tostring(timeLeft or 120)
+	timerLbl.TextColor3      = Color3.fromRGB(220, 50, 50)
+	timerLbl.Font            = Enum.Font.GothamBold
+	timerLbl.TextSize        = 16
+	timerLbl.TextXAlignment  = Enum.TextXAlignment.Center
+
+	downedTimers[downedPlayer.UserId] = billboard
+end
+
+local function updateDownedTimer(downedPlayer, timeLeft)
+	local billboard = downedTimers[downedPlayer.UserId]
+	if not billboard then return end
+	local timerLbl = billboard:FindFirstChild("Frame") and
+		billboard.Frame:FindFirstChild("Time")
+	if timerLbl then
+		timerLbl.Text = tostring(timeLeft)
+		-- Cambiar color cuando quede poco tiempo
+		if timeLeft <= 30 then
+			timerLbl.TextColor3 = Color3.fromRGB(220, 200, 40)
+		elseif timeLeft <= 60 then
+			timerLbl.TextColor3 = Color3.fromRGB(220, 120, 40)
+		end
+	end
+end
+
+local function removeDownedTimer(downedPlayer)
+	if downedTimers[downedPlayer.UserId] then
+		downedTimers[downedPlayer.UserId]:Destroy()
+		downedTimers[downedPlayer.UserId] = nil
+	end
+end
+
+-- ════════════════════════════════════════════════
 --  EVENTOS DEL SERVIDOR
 -- ════════════════════════════════════════════════
 onDowned.OnClientEvent:Connect(function(downedPlayer, timeLeft)
 	downedSet[downedPlayer] = true
 
 	if downedPlayer == player then
-		-- Yo fui tumbado
+		-- Yo fui tumbado — mostrar MI panel con MI tiempo
 		isDown = true
-		DownedPanel.Visible = true
-		Vignette.Visible    = true
-		DownedTimer.Text    = tostring(timeLeft or 30)
+		DownedPanel.Visible  = true
+		Vignette.Visible     = true
+		DownedTimer.Text     = tostring(timeLeft or 120)
 		RevivePrompt.Enabled = false
 	else
-		-- Compañero tumbado — mostrar outline rojo
+		-- Compañero tumbado — outline + timer flotante propio
 		addOutline(downedPlayer)
-		if timeLeft then
-			DownedTimer.Text = tostring(timeLeft)
+		createDownedTimer(downedPlayer, timeLeft)
+	end
+end)
+
+-- Actualizar timers individualmente
+local onDownedTick = remotes:WaitForChild("PlayerDowned")
+-- El servidor ya manda PlayerDowned cada segundo con el timeLeft actualizado
+-- Solo actualizamos el timer del jugador correcto
+onDowned.OnClientEvent:Connect(function(downedPlayer, timeLeft)
+	if downedPlayer == player then
+		-- Actualizar mi propio panel
+		if DownedPanel.Visible then
+			DownedTimer.Text = tostring(timeLeft or 0)
 		end
+	else
+		-- Actualizar el timer flotante del compañero
+		updateDownedTimer(downedPlayer, timeLeft or 0)
 	end
 end)
 
 onRevived.OnClientEvent:Connect(function(downedPlayer, reviverPlayer)
 	downedSet[downedPlayer] = nil
 	removeOutline(downedPlayer)
+	removeDownedTimer(downedPlayer)
 
 	if downedPlayer == player then
 		isDown = false
@@ -361,11 +475,15 @@ onRevived.OnClientEvent:Connect(function(downedPlayer, reviverPlayer)
 	if reviverPlayer == player then
 		isReviving = false
 		RevivePanel.Visible = false
+		ReviveFill.Size     = UDim2.new(0, 0, 1, 0)
 	end
 
 	if downedPlayer == nearbyDowned then
-		nearbyDowned        = nil
+		nearbyDowned         = nil
 		RevivePrompt.Enabled = false
+		RevivePanel.Visible  = false
+		ReviveFill.Size      = UDim2.new(0, 0, 1, 0)
+		isReviving           = false
 	end
 end)
 
@@ -374,8 +492,11 @@ onProgress.OnClientEvent:Connect(function(downedPlayer, progress)
 		isReviving = false
 		RevivePanel.Visible = false
 		ReviveFill.Size     = UDim2.new(0, 0, 1, 0)
+		ReviveLabel.Text    = "Reviviendo..."
 		return
 	end
+
+	if not isReviving then return end
 
 	RevivePanel.Visible = true
 	TweenService:Create(ReviveFill,
@@ -383,12 +504,13 @@ onProgress.OnClientEvent:Connect(function(downedPlayer, progress)
 		{ Size = UDim2.new(math.clamp(progress, 0, 1), 0, 1, 0) }):Play()
 end)
 
--- Limpiar outlines si alguien sale del juego
+-- Limpiar si alguien sale del juego
 Players.PlayerRemoving:Connect(function(p)
 	if outlines[p.UserId] then
 		outlines[p.UserId]:Destroy()
 		outlines[p.UserId] = nil
 	end
+	removeDownedTimer(p)
 	downedSet[p] = nil
 end)
 
