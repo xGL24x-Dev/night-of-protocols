@@ -38,6 +38,9 @@ local hotbarItems   = {}   -- [slot] = itemData o nil
 local backpackLevel    = 0   -- 0 = sin mochila, 1/2/3 = niveles
 local inventoryItems   = {}  -- items dentro de la mochila
 local inventoryOpen    = false
+local nearbyItem   = nil
+local PICKUP_RANGE = 8
+
 
 local BACKPACK_SLOTS = { [0]=0, [1]=4, [2]=6, [3]=8 }
 local BACKPACK_UPGRADES = {
@@ -623,8 +626,6 @@ end)
 -- ════════════════════════════════════════════════
 --  DETECCIÓN DE ITEMS CERCANOS
 -- ════════════════════════════════════════════════
-local nearbyItem   = nil
-local PICKUP_RANGE = 8
 
 RunService.Heartbeat:Connect(function()
 	local character = player.Character

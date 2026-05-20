@@ -29,4 +29,57 @@ GameConfig.HACK_TIME         = 5        -- Segundos para hackear un terminal
 GameConfig.ROUND_TIME        = 600      -- Tiempo límite de la ronda (10 minutos)
 GameConfig.LOBBY_WAIT_TIME   = 15       -- Segundos de espera en lobby antes de iniciar
 
+-- ── RONDAS ────────────────────────────────
+-- 4 rondas en total. La ronda 4 tiene boss.
+-- enemyHP y enemyDamage se multiplican por
+-- EnemyMultiplier (1.0 día / 1.5 noche).
+GameConfig.ROUNDS = {
+    {
+        -- Ronda 1: introducción, enemigos lentos y débiles
+        waves          = 3,
+        enemiesPerWave = 4,
+        enemyType      = "Vigilante",
+        enemyHP        = 60,
+        enemyDamage    = 10,
+        waveDelay      = 8,    -- segundos entre oleadas
+        isBossRound    = false,
+    },
+    {
+        -- Ronda 2: más enemigos, algo más rápidos
+        waves          = 3,
+        enemiesPerWave = 6,
+        enemyType      = "Vigilante",
+        enemyHP        = 80,
+        enemyDamage    = 15,
+        waveDelay      = 7,
+        isBossRound    = false,
+    },
+    {
+        -- Ronda 3: oleadas grandes, enemigos resistentes
+        waves          = 4,
+        enemiesPerWave = 8,
+        enemyType      = "Vigilante",
+        enemyHP        = 100,
+        enemyDamage    = 20,
+        waveDelay      = 6,
+        isBossRound    = false,
+    },
+    {
+        -- Ronda 4: oleada previa + jefe final
+        waves          = 2,
+        enemiesPerWave = 6,
+        enemyType      = "Vigilante",
+        enemyHP        = 100,
+        enemyDamage    = 20,
+        waveDelay      = 5,
+        isBossRound    = true,
+        bossName       = "FinalBoss",
+        bossHP         = 2000,
+        bossDamage     = 35,
+    },
+}
+
+GameConfig.INTERMISSION_TIME = 10   -- segundos entre rondas
+GameConfig.COUNTDOWN_TIME    = 10   -- cuenta regresiva antes de ronda 1
+
 return GameConfig
